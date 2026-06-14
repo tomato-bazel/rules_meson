@@ -26,7 +26,10 @@ def main():
     assert '"nsBrowserApp.cpp"' in tree["browser/app"]
     # genrule + its consumer colocated in the same package
     assert "genrule(" in dom and "cc_library" in dom
-    print("PASS tree: per-package BUILD, package-relative srcs, cross-package //pkg:target deps")
+    # cross-package consumability: libraries + codegen are public
+    assert 'visibility = [\n        "//visibility:public",' in dom, "dombindings/genrule need visibility"
+    assert "//visibility:public" in tree["xpcom/base"], "xpcom (cross-package dep) needs visibility"
+    print("PASS tree: per-package BUILD, package-relative srcs, cross-package //pkg:target deps + visibility")
     return 0
 
 

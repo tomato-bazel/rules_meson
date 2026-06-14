@@ -24,6 +24,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import emit_bazel  # noqa: E402  (reuse _strlist / _genrule_cmd)
 
+_PUBLIC = ["//visibility:public"]
+
 
 def _label(dep_name, dep_comp, here):
     """Cross-package -> //pkg:target ; same-package -> :target."""
@@ -73,7 +75,8 @@ def emit_tree(graph):
             blocks.append("")
         for t in ts:
             if t["kind"] == "TARGET_KIND_GENERATED":
-                blocks.append(emit_bazel._emit_generated(_relativize(t, comp)))
+                # Public: a codegen output may be consumed from another package.
+                blocks.append(emit_bazel._emit_generated(_relativize(t, comp), _PUBLIC))
                 continue
             # Resolve deps: generated sources fold in (package-relative if local,
             # //pkg:out if cross-package); library deps become //pkg:lib or :lib.
@@ -89,8 +92,12 @@ def emit_tree(graph):
                     deps.append(_label(d, dc, comp))
             rel["srcs_resolved"] = list(dict.fromkeys(srcs))
             rel["deps_resolved"] = list(dict.fromkeys(deps))
-            rule = "cc_library" if t["kind"] == "TARGET_KIND_LIBRARY" else "cc_binary"
-            blocks.append(emit_bazel._emit_cc(rel, rule))
+            # Libraries are depended on across packages -> public; binaries are
+            # leaves -> default (private) visibility.
+            if t["kind"] == "TARGET_KIND_LIBRARY":
+                blocks.append(emit_bazel._emit_cc(rel, "cc_library", _PUBLIC))
+            else:
+                blocks.append(emit_bazel._emit_cc(rel, "cc_binary"))
         out[comp] = "\n".join(blocks)
     return out
 

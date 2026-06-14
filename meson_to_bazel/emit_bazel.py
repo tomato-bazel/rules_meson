@@ -54,24 +54,25 @@ def _strlist(name, values, indent="    "):
     return "{i}{name} = [\n{items}{i}],\n".format(i=indent, name=name, items=items)
 
 
-def _emit_generated(t):
+def _emit_generated(t, visibility=None):
     cg = t.get("codegen", {})
     outputs = cg.get("outputs", [])
     cmd = _genrule_cmd(cg.get("command", []), len(outputs))
     out = "".join(
         '''    name = "{name}",
 {outs}{srcs}    cmd = {cmd},
-'''.format(
+{vis}'''.format(
             name=t["name"],
             outs=_strlist("outs", outputs),
             srcs=_strlist("srcs", cg.get("inputs", [])),
             cmd=json.dumps(cmd),
+            vis=_strlist("visibility", visibility),
         )
     )
     return "genrule(\n{}\n)\n".format(out.rstrip("\n"))
 
 
-def _emit_cc(t, rule):
+def _emit_cc(t, rule, visibility=None):
     # Deps to GENERATED targets become srcs entries (their outputs); deps to
     # libraries become Bazel label deps. The frontend records dep names; the
     # caller resolves kinds via `gen_names`.
@@ -86,6 +87,7 @@ def _emit_cc(t, rule):
                 _strlist("defines", t.get("defines", [])),
                 _strlist("copts", t.get("copts", [])),
                 _strlist("deps", t.get("deps_resolved", [])),
+                _strlist("visibility", visibility),
             ]
         ).rstrip("\n"),
     )
