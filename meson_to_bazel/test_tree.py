@@ -24,8 +24,11 @@ def main():
     assert '"//xpcom/base:xpcom"' in dom
     assert '"//dom/bindings:dombindings"' in tree["browser/app"]
     assert '"nsBrowserApp.cpp"' in tree["browser/app"]
-    # genrule + its consumer colocated in the same package
-    assert "genrule(" in dom and "cc_library" in dom
+    # WebIDL codegen is a first-class webidl_library (not a genrule), loaded
+    # from rules_firefox, colocated with its cc_library consumer.
+    assert "webidl_library(" in dom and "cc_library" in dom
+    assert 'load("@rules_firefox//firefox:defs.bzl", "webidl_library")' in dom
+    assert 'srcs = [\n        "Foo.webidl",' in dom  # package-relative IDL src
     # cross-package consumability: libraries + codegen are public
     assert 'visibility = [\n        "//visibility:public",' in dom, "dombindings/genrule need visibility"
     assert "//visibility:public" in tree["xpcom/base"], "xpcom (cross-package dep) needs visibility"

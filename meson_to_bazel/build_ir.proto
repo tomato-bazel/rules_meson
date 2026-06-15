@@ -38,6 +38,11 @@ message Codegen {
   repeated string command = 1;   // argv that produces the outputs
   repeated string inputs = 2;    // declared input files (repo-relative)
   repeated string outputs = 3;   // generated files (repo-relative)
+  // Neutral codegen classification ("" = a generic shell genrule; "webidl",
+  // "xpidl", "ipdl" = a first-class Bazel rule the backend maps it to). The
+  // frontend sets this from the generator script; the emit backend turns it
+  // into the idiomatic rule (e.g. webidl_library) instead of a genrule.
+  string kind = 4;
 }
 
 message Target {

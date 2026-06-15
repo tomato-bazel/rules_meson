@@ -54,7 +54,57 @@ def _strlist(name, values, indent="    "):
     return "{i}{name} = [\n{items}{i}],\n".format(i=indent, name=name, items=items)
 
 
+# Neutral codegen kind -> (.bzl file to load, rule symbol). A kind not here
+# falls back to a generic genrule.
+_CODEGEN_RULES = {
+    "webidl": ("@rules_firefox//firefox:defs.bzl", "webidl_library"),
+    "xpidl": ("@rules_firefox//firefox:defs.bzl", "xpidl_library"),
+    "ipdl": ("@rules_firefox//firefox:defs.bzl", "ipdl_library"),
+}
+
+
+def _codegen_rule(t):
+    return _CODEGEN_RULES.get(t.get("codegen", {}).get("kind"))
+
+
+def _loads_for(targets):
+    """{bzl_file: set(symbols)} the emitted targets need to load."""
+    loads = {}
+    if any(t["kind"] != "TARGET_KIND_GENERATED" for t in targets):
+        loads.setdefault("@rules_cc//cc:defs.bzl", set()).update(("cc_binary", "cc_library"))
+    for t in targets:
+        rule = _codegen_rule(t) if t["kind"] == "TARGET_KIND_GENERATED" else None
+        if rule:
+            loads.setdefault(rule[0], set()).add(rule[1])
+    return loads
+
+
+def _load_lines(loads):
+    return [
+        'load("{}", {})'.format(f, ", ".join('"{}"'.format(s) for s in sorted(syms)))
+        for f, syms in sorted(loads.items())
+    ]
+
+
+def _emit_typed_codegen(t, rule_name, visibility=None):
+    # A first-class codegen rule (e.g. webidl_library): srcs are the IDL inputs,
+    # outs the generated sources; the rule owns running the generator toolchain.
+    cg = t.get("codegen", {})
+    body = "".join(
+        [
+            '    name = "{}",\n'.format(t["name"]),
+            _strlist("srcs", cg.get("inputs", [])),
+            _strlist("outs", cg.get("outputs", [])),
+            _strlist("visibility", visibility),
+        ]
+    ).rstrip("\n")
+    return "{}(\n{}\n)\n".format(rule_name, body)
+
+
 def _emit_generated(t, visibility=None):
+    rule = _codegen_rule(t)
+    if rule:
+        return _emit_typed_codegen(t, rule[1], visibility)
     cg = t.get("codegen", {})
     outputs = cg.get("outputs", [])
     cmd = _genrule_cmd(cg.get("command", []), len(outputs))
@@ -116,7 +166,7 @@ def emit(graph):
             t["srcs_resolved"] = list(dict.fromkeys(srcs))
             t["deps_resolved"] = list(dict.fromkeys(deps))
 
-    blocks = ['load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")', ""]
+    blocks = _load_lines(_loads_for(targets)) + [""]
     for t in targets:
         if t["kind"] == "TARGET_KIND_GENERATED":
             blocks.append(_emit_generated(t))

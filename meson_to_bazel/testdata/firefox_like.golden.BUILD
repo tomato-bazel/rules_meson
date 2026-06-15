@@ -1,15 +1,15 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_firefox//firefox:defs.bzl", "webidl_library")
 
-genrule(
+webidl_library(
     name = "FooBinding",
+    srcs = [
+        "dom/bindings/Foo.webidl",
+    ],
     outs = [
         "dom/bindings/FooBinding.cpp",
         "dom/bindings/FooBinding.h",
     ],
-    srcs = [
-        "dom/bindings/Foo.webidl",
-    ],
-    cmd = "python Codegen.py codegen $(OUTS) $(SRCS)",
 )
 
 cc_library(

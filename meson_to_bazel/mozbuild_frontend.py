@@ -36,6 +36,19 @@ import sys
 _LIB_TYPES = ("StaticLibrary", "SharedLibrary", "Library", "RustLibrary")
 _EXE_TYPES = ("Program", "SimpleProgram")
 
+# Generator script (basename) -> neutral codegen kind. Mozilla's WebIDL bindings
+# come from dom/bindings/Codegen.py; XPIDL / IPDL have their own generators. A
+# kind maps to a first-class Bazel rule in the emit backend (else a genrule).
+_CODEGEN_KINDS = {
+    "Codegen.py": "webidl",
+    "xpidl.py": "xpidl",
+    "ipdl.py": "ipdl",
+}
+
+
+def _codegen_kind(script):
+    return _CODEGEN_KINDS.get(os.path.basename(script or ""), "")
+
 
 def _ctx_rel(context, f):
     """mozbuild source paths are context(dir)-relative unless absolute (a
@@ -74,7 +87,10 @@ def convert(objects, corpus):
                     "name": o["name"],
                     "kind": "TARGET_KIND_GENERATED",
                     "component": o.get("context", ""),
-                    "codegen": {"command": cmd, "inputs": ins, "outputs": outs},
+                    "codegen": {
+                        "command": cmd, "inputs": ins, "outputs": outs,
+                        "kind": _codegen_kind(o.get("script", "")),
+                    },
                 }
             )
             for out in outs:

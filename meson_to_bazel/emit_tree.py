@@ -68,10 +68,8 @@ def emit_tree(graph):
 
     out = {}
     for comp, ts in sorted(by_comp.items()):
-        needs_cc = any(t["kind"] != "TARGET_KIND_GENERATED" for t in ts)
-        blocks = []
-        if needs_cc:
-            blocks.append('load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")')
+        blocks = emit_bazel._load_lines(emit_bazel._loads_for(ts))
+        if blocks:
             blocks.append("")
         for t in ts:
             if t["kind"] == "TARGET_KIND_GENERATED":
