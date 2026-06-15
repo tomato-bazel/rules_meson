@@ -91,11 +91,9 @@ def emit_tree(graph):
             rel["srcs_resolved"] = list(dict.fromkeys(srcs))
             rel["deps_resolved"] = list(dict.fromkeys(deps))
             # Libraries are depended on across packages -> public; binaries are
-            # leaves -> default (private) visibility.
-            if t["kind"] == "TARGET_KIND_LIBRARY":
-                blocks.append(emit_bazel._emit_cc(rel, "cc_library", _PUBLIC))
-            else:
-                blocks.append(emit_bazel._emit_cc(rel, "cc_binary"))
+            # leaves -> default (private) visibility. Language picks the rule.
+            vis = _PUBLIC if t["kind"] == "TARGET_KIND_LIBRARY" else None
+            blocks.append(emit_bazel._emit_lib_exe(rel, vis))
         out[comp] = "\n".join(blocks)
     return out
 

@@ -70,8 +70,11 @@ def _codegen_rule(t):
 def _loads_for(targets):
     """{bzl_file: set(symbols)} the emitted targets need to load."""
     loads = {}
-    if any(t["kind"] != "TARGET_KIND_GENERATED" for t in targets):
+    lib_exe = [t for t in targets if t["kind"] in ("TARGET_KIND_LIBRARY", "TARGET_KIND_EXECUTABLE")]
+    if any(t.get("language") != "LANGUAGE_RUST" for t in lib_exe):
         loads.setdefault("@rules_cc//cc:defs.bzl", set()).update(("cc_binary", "cc_library"))
+    if any(t.get("language") == "LANGUAGE_RUST" for t in lib_exe):
+        loads.setdefault("@rules_rust//rust:defs.bzl", set()).update(("rust_binary", "rust_library"))
     for t in targets:
         rule = _codegen_rule(t) if t["kind"] == "TARGET_KIND_GENERATED" else None
         if rule:
@@ -143,6 +146,30 @@ def _emit_cc(t, rule, visibility=None):
     )
 
 
+_CC_RULE = {"TARGET_KIND_LIBRARY": "cc_library", "TARGET_KIND_EXECUTABLE": "cc_binary"}
+_RUST_RULE = {"TARGET_KIND_LIBRARY": "rust_library", "TARGET_KIND_EXECUTABLE": "rust_binary"}
+
+
+def _emit_rust(t, rule, visibility=None):
+    body = "".join(
+        [
+            '    name = "{}",\n'.format(t["name"]),
+            _strlist("srcs", t.get("srcs_resolved", t.get("sources", []))),
+            '    edition = "{}",\n'.format(t.get("edition", "2021")),
+            _strlist("deps", t.get("deps_resolved", [])),
+            _strlist("visibility", visibility),
+        ]
+    ).rstrip("\n")
+    return "{}(\n{}\n)\n".format(rule, body)
+
+
+def _emit_lib_exe(t, visibility=None):
+    """Emit a library/executable target in the right language's rule."""
+    if t.get("language") == "LANGUAGE_RUST":
+        return _emit_rust(t, _RUST_RULE[t["kind"]], visibility)
+    return _emit_cc(t, _CC_RULE[t["kind"]], visibility)
+
+
 def emit(graph):
     targets = graph.get("targets", [])
     gen_outputs = {
@@ -170,10 +197,8 @@ def emit(graph):
     for t in targets:
         if t["kind"] == "TARGET_KIND_GENERATED":
             blocks.append(_emit_generated(t))
-        elif t["kind"] == "TARGET_KIND_LIBRARY":
-            blocks.append(_emit_cc(t, "cc_library"))
-        elif t["kind"] == "TARGET_KIND_EXECUTABLE":
-            blocks.append(_emit_cc(t, "cc_binary"))
+        elif t["kind"] in ("TARGET_KIND_LIBRARY", "TARGET_KIND_EXECUTABLE"):
+            blocks.append(_emit_lib_exe(t))
     return "\n".join(blocks)
 
 

@@ -66,6 +66,7 @@ message Target {
   Codegen codegen = 10;            // set iff kind == TARGET_KIND_GENERATED
 
   string component = 11;           // owning component, for the decomposition cut
+  string edition = 12;             // Rust edition (rust_library/rust_binary); "" otherwise
 }
 
 message BuildGraph {

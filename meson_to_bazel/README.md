@@ -50,8 +50,10 @@ python3 emit_bazel.py graph.json > BUILD.bazel
 ## Files
 
 - `build_ir.proto`, `emit_bazel.py` — the shared schema + Bazel backend.
-- `meson_frontend.py` — meson `introspect --targets` → `BuildGraph`.
-- `mozbuild_frontend.py` — mozbuild emitter objects (JSON) → `BuildGraph`.
+- `meson_frontend.py` — meson `introspect --targets` → `BuildGraph` (C/C++).
+- `mozbuild_frontend.py` — mozbuild emitter objects (JSON) → `BuildGraph` (C/C++).
+- `cargo_frontend.py` — `cargo metadata` → `BuildGraph` (Rust → rules_rust); the
+  third frontend, so Rust/Cargo projects (e.g. Servo) come up via the same IR.
 - `mozbuild_backend.py` — the `./mach build-backend -b BuildIR` backend that
   produces that JSON from a configured mozilla-central.
 - `emit_kythe.py` — Layer-A down-projection: `BuildGraph` → Kythe
