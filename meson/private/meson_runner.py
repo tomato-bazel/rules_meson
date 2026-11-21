@@ -71,6 +71,7 @@ def main() -> int:
              "Only the custom_target outputs are built — not object files "
              "or final binaries — so the wall-clock cost stays bounded.",
     )
+    p.add_argument("--required-custom-output", action="append", default=[])
     args = p.parse_args()
 
     # Put ninja's directory on PATH so meson's subprocesses find it.
@@ -144,12 +145,13 @@ def main() -> int:
         # via meson custom_target declarations; ninja knows how to
         # execute them. We pass only custom_target output paths, so
         # ninja skips object files + link steps.
-        if args.build_custom_targets:
+        if args.build_custom_targets or args.required_custom_output:
             rc = _run_custom_targets(
                 ninja_bin=os.path.abspath(args.ninja_bin),
                 build_dir=build_dir,
                 introspect_path=args.out_introspect,
                 log_path=args.out_log,
+                required_outputs=args.required_custom_output,
             )
             if rc != 0:
                 return rc
@@ -161,7 +163,7 @@ def main() -> int:
         _capture_generated_headers(build_dir, args.out_headers_dir)
 
         _relativize_compdb(
-            compdb_src, args.out_compdb, args.src_root, build_dir,
+            compdb_src, args.out_compdb, build_dir,
         )
     return 0
 
@@ -216,6 +218,7 @@ def _create_meson_shim_dir(build_dir: str) -> str:
 
 def _run_custom_targets(
     ninja_bin: str, build_dir: str, introspect_path: str, log_path: str,
+    required_outputs: list[str],
 ) -> int:
     """Invoke ninja to build every custom_target the project declares.
 
@@ -264,6 +267,13 @@ def _run_custom_targets(
             else:
                 targets.append(f)
 
+    if required_outputs:
+        missing = set(required_outputs).difference(targets)
+        if missing:
+            sys.stderr.write("unknown required Meson custom outputs: %s\n" % ", ".join(sorted(missing)))
+            return 1
+        targets = list(dict.fromkeys(required_outputs))
+
     if not targets:
         # No custom_targets in this project — nothing to do.
         return 0
@@ -297,6 +307,9 @@ def _run_custom_targets(
         )
 
     if result.returncode != 0:
+        if required_outputs:
+            sys.stderr.write("[meson_runner] required custom generation failed. See the Meson log.\n")
+            return result.returncode
         # `-k 0` means we tried everything but some failed. Report the
         # exit code but don't abort — partial codegen is still useful
         # (frontend files generated even if backend ones failed).
@@ -364,7 +377,7 @@ def _run_with_stdout_to_file(out_path: str, fn, also_stderr: bool) -> int:
     return rc
 
 
-def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> None:
+def _relativize_compdb(src: str, dst: str, build_dir: str) -> None:
     """Rewrite compile_commands.json so paths are stable across sandboxes.
 
     Meson writes entries with absolute sandbox paths (build_dir for
@@ -386,12 +399,7 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
     with open(src, "r", encoding="utf-8") as fh:
         entries = json.load(fh)
 
-    abs_src_root = os.path.abspath(src_root)
-    if abs_src_root.endswith(src_root):
-        sandbox_root = abs_src_root[: -len(src_root)].rstrip("/")
-    else:
-        # Fallback: cwd is the sandbox root.
-        sandbox_root = os.getcwd()
+    sandbox_root = os.getcwd()
 
     def _rewrite_token(tok: str) -> str | None:
         # Strip sandbox-absolute prefixes so the path becomes
@@ -434,11 +442,10 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
     for entry in entries:
         entry["directory"] = "."
 
+        source = None
         if "file" in entry:
-            f = entry["file"]
-            if not os.path.isabs(f):
-                f = os.path.normpath(os.path.join(build_dir, f))
-            entry["file"] = _rewrite_token(f) or f
+            source = os.path.normpath(os.path.join(build_dir, entry["file"]))
+            entry["file"] = _rewrite_token(source) or source
 
         # Meson emits EITHER `arguments` (list) or `command` (shell
         # string). Normalize both into a rewritten list and store as
@@ -458,7 +465,10 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
                 # Drop this flag and its paired argument.
                 i += 2
                 continue
-            tok = _rewrite_flag(a)
+            if source is not None and not a.startswith("-") and os.path.normpath(os.path.join(build_dir, a)) == source:
+                tok = entry["file"]
+            else:
+                tok = _rewrite_flag(a)
             if tok is None:
                 # Output-only artifact under build_dir (object file etc.);
                 # drop. We DO preserve -I/-isystem flags pointing into

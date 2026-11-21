@@ -65,6 +65,8 @@ def _meson_configure_impl(ctx):
         args.add("--pre-remove=" + rel)
     if ctx.attr.build_custom_targets:
         args.add("--build-custom-targets")
+    for output in ctx.attr.required_custom_outputs:
+        args.add("--required-custom-output", output)
 
     ctx.actions.run(
         executable = ctx.executable._meson_runner,
@@ -121,6 +123,10 @@ meson_configure = rule(
                   "source tree carries files that confuse meson's " +
                   "clean-checkout heuristic (e.g. Postgres' autoconf-" +
                   "style pg_config.h overlay).",
+        ),
+        "required_custom_outputs": attr.string_list(
+            doc = "Build-directory-relative Meson custom output paths to generate. " +
+                  "When populated, only these outputs are requested and generation failures fail the action.",
         ),
         "build_custom_targets": attr.bool(
             default = False,
