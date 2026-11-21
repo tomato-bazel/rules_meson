@@ -10,3 +10,4 @@ project('hello', 'c')
 # build, but library() is cheaper to introspect later (no need for the
 # host's linker to be probed).
 library('hello', 'hello.c')
+run_command(find_program('roma_aux_probe'), check: true)
