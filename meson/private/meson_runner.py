@@ -203,15 +203,23 @@ def _create_meson_shim_dir(build_dir: str) -> str:
     shim_path = os.path.join(shim_dir, "meson")
     # Quote sys.path entries safely via repr() so the shim parses even
     # if a path contains spaces.
+    # Ninja executes from the temporary build directory. Resolve the Bazel
+    # launcher's execroot-relative interpreter and import paths here.
+    interpreter = os.path.abspath(sys.executable)
+    import_paths = [os.path.abspath(path) for path in sys.path]
+    python_shim = os.path.join(shim_dir, "meson.py")
     shim_content = (
-        "#!" + sys.executable + "\n"
         "import sys\n"
-        "sys.path[:0] = " + repr(sys.path) + "\n"
+        "sys.path[:0] = " + repr(import_paths) + "\n"
         "from mesonbuild import mesonmain\n"
         "sys.exit(mesonmain.run(sys.argv[1:], sys.argv[0]))\n"
     )
-    with open(shim_path, "w", encoding="utf-8") as f:
+    with open(python_shim, "w", encoding="utf-8") as f:
         f.write(shim_content)
+    # Keep the kernel shebang short even under deep Bazel sandbox paths.
+    launcher = "#!/bin/sh\nexec " + shlex.join([interpreter, python_shim]) + ' "$@"\n'
+    with open(shim_path, "w", encoding="utf-8") as f:
+        f.write(launcher)
     os.chmod(shim_path, 0o755)
     return shim_dir
 
