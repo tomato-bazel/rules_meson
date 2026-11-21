@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -160,7 +161,7 @@ def main() -> int:
         # contains BOTH the meson-generated config headers (pg_config.h
         # etc.) and the script-generated ones (errcodes.h, fmgroids.h,
         # nodetags.h, ...).
-        _capture_generated_headers(build_dir, args.out_headers_dir)
+        _capture_generated_headers(build_dir, args.out_headers_dir, args.src_root)
 
         _relativize_compdb(
             compdb_src, args.out_compdb, build_dir,
@@ -168,13 +169,23 @@ def main() -> int:
     return 0
 
 
-def _capture_generated_headers(build_dir: str, out_dir: str) -> None:
+def _capture_generated_headers(build_dir: str, out_dir: str, source_root: str) -> None:
     """Walk build_dir and copy generated header-ish files into out_dir,
     preserving the relative directory structure. Captures .h, .in (meson
     templates that downstream tooling may need), .pc (pkg-config), and
     .def (defines files some projects emit)."""
     os.makedirs(out_dir, exist_ok=True)
     HEADER_EXTS = (".h", ".hpp", ".inc", ".in", ".pc", ".def")
+    absolute_source = os.path.abspath(source_root)
+    workspace_source = os.fsencode(os.path.relpath(absolute_source))
+    source_prefixes = [
+        os.fsencode(path + os.sep)
+        for path in (absolute_source, os.path.relpath(absolute_source, build_dir))
+    ]
+    line_path = re.compile(
+        rb'(?m)^(#line[ \t]+[0-9]+[ \t]+")'
+        + rb"(?:" + rb"|".join(re.escape(prefix) for prefix in source_prefixes) + rb")"
+    )
     for root, _dirs, files in os.walk(build_dir):
         # Skip meson's own bookkeeping dirs — they hold internal state,
         # not artifacts downstream consumers need.
@@ -188,7 +199,37 @@ def _capture_generated_headers(build_dir: str, out_dir: str) -> None:
             src = os.path.join(root, f)
             dst_dir = os.path.join(out_dir, rel_root) if rel_root != "." else out_dir
             os.makedirs(dst_dir, exist_ok=True)
-            shutil.copy2(src, os.path.join(dst_dir, f))
+            dst = os.path.join(dst_dir, f)
+            if f.endswith((".h", ".hpp", ".inc", ".def")):
+                with open(src, "rb") as source:
+                    content = source.read()
+                rewritten = line_path.sub(
+                    lambda match: match[1] + workspace_source + b"/", content,
+                )
+            elif f.endswith("-uninstalled.pc") and rel_root == "meson-uninstalled":
+                with open(src, "rb") as source:
+                    content = source.read()
+                # pkg-config resolves the captured build root from the .pc file.
+                # Source paths are relative to the downstream action's workspace.
+                rewritten = content.replace(
+                    b"prefix=" + os.fsencode(build_dir) + b"\n",
+                    b"prefix=${pcfiledir}/..\n",
+                    1,
+                ).replace(
+                    b"srcdir=" + os.fsencode(absolute_source) + b"\n",
+                    b"srcdir=" + workspace_source + b"\n",
+                    1,
+                )
+            else:
+                shutil.copy2(src, dst)
+                continue
+
+            if rewritten == content:
+                shutil.copy2(src, dst)
+            else:
+                with open(dst, "wb") as output:
+                    output.write(rewritten)
+                shutil.copystat(src, dst)
 
 
 def _create_meson_shim_dir(build_dir: str) -> str:
