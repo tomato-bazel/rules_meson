@@ -12,4 +12,6 @@ meson_configure(
         "hello.c",
     ],
     marker = "meson.build",
+    auxiliary_tools = ["roma_aux_probe"],
+    auxiliary_tool_environment = {"aux_data.txt": "ROMA_MESON_AUX_DATA"},
 )

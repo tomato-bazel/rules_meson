@@ -49,6 +49,15 @@ def _meson_configure_impl(ctx):
     args.add("--out-introspect", out_introspect.path)
     args.add("--out-headers-dir", out_headers.path)
     args.add("--ninja-bin", ctx.file._ninja.path)
+    for tool in ctx.files.auxiliary_tools:
+        args.add("--tool-bin", tool.path)
+    auxiliary_data = []
+    for target, name in ctx.attr.auxiliary_tool_environment.items():
+        files = target.files.to_list()
+        if len(files) != 1:
+            fail("auxiliary tool environment %s must name one file or directory" % name)
+        auxiliary_data.append(files[0])
+        args.add("--tool-env", name + "=" + files[0].path)
     for opt in ctx.attr.meson_options:
         # `=` form so values starting with `-` don't trip argparse.
         args.add("--meson-option=" + opt)
@@ -60,7 +69,7 @@ def _meson_configure_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._meson_runner,
         outputs = [out_compdb, out_log, out_introspect, out_headers],
-        inputs = depset(ctx.files.srcs + [ctx.file.marker, ctx.file._ninja]),
+        inputs = depset(ctx.files.srcs + ctx.files.auxiliary_tools + auxiliary_data + [ctx.file.marker, ctx.file._ninja]),
         arguments = [args],
         mnemonic = "MesonConfigure",
         progress_message = "Running meson setup against %s" % src_root,
@@ -124,6 +133,16 @@ meson_configure = rule(
                   "clock cost stays bounded. Failures with `-k 0` are " +
                   "non-fatal: partial codegen still useful (frontend " +
                   "files generated even if backend ones fail).",
+        ),
+        "auxiliary_tools": attr.label_list(
+            allow_files = True,
+            cfg = "exec",
+            doc = "Files whose parent directories are added to the configure and code generation PATH.",
+        ),
+        "auxiliary_tool_environment": attr.label_keyed_string_dict(
+            allow_files = True,
+            cfg = "exec",
+            doc = "Single-file or directory labels mapped to environment variable names for auxiliary tools.",
         ),
         "_meson_runner": attr.label(
             default = "//meson/private:meson_runner",

@@ -43,6 +43,8 @@ def main() -> int:
                         "clang's -I via the ${MESON_HEADERS_TREE} sentinel.")
     p.add_argument("--ninja-bin", required=True,
                    help="Path to the ninja binary; its dir is added to PATH.")
+    p.add_argument("--tool-bin", action="append", default=[])
+    p.add_argument("--tool-env", action="append", default=[])
     p.add_argument(
         "--meson-option",
         action="append",
@@ -75,9 +77,15 @@ def main() -> int:
     # Keep /usr/bin and /bin so meson can shell out to system tools
     # (sh, env, etc.) it expects to be ambient.
     ninja_dir = os.path.dirname(os.path.abspath(args.ninja_bin))
-    os.environ["PATH"] = "{}:{}".format(
-        ninja_dir, os.environ.get("PATH", "/usr/bin:/bin")
+    tool_dirs = (os.path.dirname(os.path.abspath(path)) for path in args.tool_bin)
+    os.environ["PATH"] = os.pathsep.join(
+        [ninja_dir, *dict.fromkeys(tool_dirs), os.environ.get("PATH", "/usr/bin:/bin")]
     )
+    for entry in args.tool_env:
+        name, separator, path = entry.partition("=")
+        if not name or not separator or not path:
+            p.error("--tool-env must have the form NAME=PATH")
+        os.environ[name] = os.path.abspath(path)
     # meson sniffs $NINJA before falling back to PATH search.
     os.environ["NINJA"] = os.path.abspath(args.ninja_bin)
 
