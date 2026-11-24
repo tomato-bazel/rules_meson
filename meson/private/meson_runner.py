@@ -164,7 +164,7 @@ def main() -> int:
         _capture_generated_headers(build_dir, args.out_headers_dir, args.src_root)
 
         _relativize_compdb(
-            compdb_src, args.out_compdb, build_dir,
+            compdb_src, args.out_compdb, build_dir, args.src_root,
         )
     return 0
 
@@ -426,7 +426,7 @@ def _run_with_stdout_to_file(out_path: str, fn, also_stderr: bool) -> int:
     return rc
 
 
-def _relativize_compdb(src: str, dst: str, build_dir: str) -> None:
+def _relativize_compdb(src: str, dst: str, build_dir: str, source_root: str) -> None:
     """Rewrite compile_commands.json so paths are stable across sandboxes.
 
     Meson writes entries with absolute sandbox paths (build_dir for
@@ -449,18 +449,35 @@ def _relativize_compdb(src: str, dst: str, build_dir: str) -> None:
         entries = json.load(fh)
 
     sandbox_root = os.getcwd()
+    staged_source_root = os.path.relpath(source_root, sandbox_root)
+    resolved_source_root = os.path.realpath(source_root)
+    source_is_staged = staged_source_root != ".." and not staged_source_root.startswith("../")
 
     def _rewrite_token(tok: str) -> str | None:
         # Strip sandbox-absolute prefixes so the path becomes
         # workspace-relative.
         if tok.startswith(sandbox_root + "/"):
             return tok[len(sandbox_root) + 1:]
+        # macOS tools can spell the sandbox path as /tmp while getcwd
+        # returns /private/tmp. Resolve the parent without following a
+        # staged source file's final symlink.
+        if os.path.isabs(tok):
+            parent, basename = os.path.split(tok)
+            normalized = os.path.join(os.path.realpath(parent), basename)
+            if normalized.startswith(sandbox_root + "/"):
+                return normalized[len(sandbox_root) + 1:]
         # build_dir paths get replaced with the ${MESON_HEADERS_TREE}
         # sentinel. Downstream consumers (rules_lang's
         # c_ast_dump_from_compdb etc.) substitute the sentinel with the
         # actual headers-TreeArtifact path when invoking clang.
         if tok.startswith(build_dir):
             return "${MESON_HEADERS_TREE}" + tok[len(build_dir):]
+        # Local execution can expose the real workspace through Bazel's
+        # execroot symlinks. Translate only paths within the declared source.
+        if source_is_staged and os.path.isabs(tok):
+            if normalized == resolved_source_root or normalized.startswith(resolved_source_root + "/"):
+                relative = os.path.relpath(normalized, resolved_source_root)
+                return os.path.normpath(os.path.join(staged_source_root, relative))
         return tok
 
     def _rewrite_flag(flag: str) -> str | None:

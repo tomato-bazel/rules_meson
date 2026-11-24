@@ -30,22 +30,28 @@ _MESON_URL = (
 
 _NINJA_VERSION = "1.12.1"
 
-# Per-OS prebuilt ninja from the upstream GitHub release, keyed by the
-# `rctx.os.name` family. ninja-mac.zip is a universal binary (x86_64 + arm64);
-# ninja-linux.zip is x86_64. (Linux arm64 would need ninja-linux-aarch64.zip;
-# Windows ninja-win.zip — add when a CI exercises them.)
+# The upstream macOS asset is universal. Linux assets are architecture-specific.
 _NINJA_ASSETS = {
     "mac": ("ninja-mac.zip", "89a287444b5b3e98f88a945afa50ce937b8ffd1dcc59c555ad9b1baf855298c9"),
-    "linux": ("ninja-linux.zip", "6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255"),
+    "linux_amd64": ("ninja-linux.zip", "6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255"),
+    "linux_arm64": ("ninja-linux-aarch64.zip", "5c25c6570b0155e95fce5918cb95f1ad9870df5768653afe128db822301a05a1"),
 }
 
 def _ninja_asset(rctx):
     name = rctx.os.name.lower()
+    arch = rctx.os.arch.lower()
     if name.startswith("mac"):
         return _NINJA_ASSETS["mac"]
     if name.startswith("linux"):
-        return _NINJA_ASSETS["linux"]
-    fail("rules_meson: no prebuilt ninja {v} for OS '{n}'".format(v = _NINJA_VERSION, n = rctx.os.name))
+        if arch in ("aarch64", "arm64"):
+            return _NINJA_ASSETS["linux_arm64"]
+        if arch in ("amd64", "x86_64"):
+            return _NINJA_ASSETS["linux_amd64"]
+    fail("rules_meson: no prebuilt ninja {v} for OS '{n}' and architecture '{a}'".format(
+        v = _NINJA_VERSION,
+        n = rctx.os.name,
+        a = rctx.os.arch,
+    ))
 
 _MESON_BUILD = """
 load("@rules_python//python:py_library.bzl", "py_library")
