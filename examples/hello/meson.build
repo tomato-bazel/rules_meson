@@ -11,3 +11,6 @@ project('hello', 'c')
 # host's linker to be probed).
 library('hello', 'hello.c')
 run_command(find_program('roma_aux_probe'), check: true)
+custom_target('generated_header',
+  output: 'generated.h',
+  command: [find_program('roma_aux_probe'), '@OUTPUT@'])

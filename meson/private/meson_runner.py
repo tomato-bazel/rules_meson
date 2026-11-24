@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -71,6 +72,7 @@ def main() -> int:
              "Only the custom_target outputs are built — not object files "
              "or final binaries — so the wall-clock cost stays bounded.",
     )
+    p.add_argument("--required-custom-output", action="append", default=[])
     args = p.parse_args()
 
     # Put ninja's directory on PATH so meson's subprocesses find it.
@@ -144,12 +146,13 @@ def main() -> int:
         # via meson custom_target declarations; ninja knows how to
         # execute them. We pass only custom_target output paths, so
         # ninja skips object files + link steps.
-        if args.build_custom_targets:
+        if args.build_custom_targets or args.required_custom_output:
             rc = _run_custom_targets(
                 ninja_bin=os.path.abspath(args.ninja_bin),
                 build_dir=build_dir,
                 introspect_path=args.out_introspect,
                 log_path=args.out_log,
+                required_outputs=args.required_custom_output,
             )
             if rc != 0:
                 return rc
@@ -158,21 +161,31 @@ def main() -> int:
         # contains BOTH the meson-generated config headers (pg_config.h
         # etc.) and the script-generated ones (errcodes.h, fmgroids.h,
         # nodetags.h, ...).
-        _capture_generated_headers(build_dir, args.out_headers_dir)
+        _capture_generated_headers(build_dir, args.out_headers_dir, args.src_root)
 
         _relativize_compdb(
-            compdb_src, args.out_compdb, args.src_root, build_dir,
+            compdb_src, args.out_compdb, build_dir,
         )
     return 0
 
 
-def _capture_generated_headers(build_dir: str, out_dir: str) -> None:
+def _capture_generated_headers(build_dir: str, out_dir: str, source_root: str) -> None:
     """Walk build_dir and copy generated header-ish files into out_dir,
     preserving the relative directory structure. Captures .h, .in (meson
     templates that downstream tooling may need), .pc (pkg-config), and
     .def (defines files some projects emit)."""
     os.makedirs(out_dir, exist_ok=True)
     HEADER_EXTS = (".h", ".hpp", ".inc", ".in", ".pc", ".def")
+    absolute_source = os.path.abspath(source_root)
+    workspace_source = os.fsencode(os.path.relpath(absolute_source))
+    source_prefixes = [
+        os.fsencode(path + os.sep)
+        for path in (absolute_source, os.path.relpath(absolute_source, build_dir))
+    ]
+    line_path = re.compile(
+        rb'(?m)^(#line[ \t]+[0-9]+[ \t]+")'
+        + rb"(?:" + rb"|".join(re.escape(prefix) for prefix in source_prefixes) + rb")"
+    )
     for root, _dirs, files in os.walk(build_dir):
         # Skip meson's own bookkeeping dirs — they hold internal state,
         # not artifacts downstream consumers need.
@@ -186,7 +199,37 @@ def _capture_generated_headers(build_dir: str, out_dir: str) -> None:
             src = os.path.join(root, f)
             dst_dir = os.path.join(out_dir, rel_root) if rel_root != "." else out_dir
             os.makedirs(dst_dir, exist_ok=True)
-            shutil.copy2(src, os.path.join(dst_dir, f))
+            dst = os.path.join(dst_dir, f)
+            if f.endswith((".h", ".hpp", ".inc", ".def")):
+                with open(src, "rb") as source:
+                    content = source.read()
+                rewritten = line_path.sub(
+                    lambda match: match[1] + workspace_source + b"/", content,
+                )
+            elif f.endswith("-uninstalled.pc") and rel_root == "meson-uninstalled":
+                with open(src, "rb") as source:
+                    content = source.read()
+                # pkg-config resolves the captured build root from the .pc file.
+                # Source paths are relative to the downstream action's workspace.
+                rewritten = content.replace(
+                    b"prefix=" + os.fsencode(build_dir) + b"\n",
+                    b"prefix=${pcfiledir}/..\n",
+                    1,
+                ).replace(
+                    b"srcdir=" + os.fsencode(absolute_source) + b"\n",
+                    b"srcdir=" + workspace_source + b"\n",
+                    1,
+                )
+            else:
+                shutil.copy2(src, dst)
+                continue
+
+            if rewritten == content:
+                shutil.copy2(src, dst)
+            else:
+                with open(dst, "wb") as output:
+                    output.write(rewritten)
+                shutil.copystat(src, dst)
 
 
 def _create_meson_shim_dir(build_dir: str) -> str:
@@ -201,21 +244,30 @@ def _create_meson_shim_dir(build_dir: str) -> str:
     shim_path = os.path.join(shim_dir, "meson")
     # Quote sys.path entries safely via repr() so the shim parses even
     # if a path contains spaces.
+    # Ninja executes from the temporary build directory. Resolve the Bazel
+    # launcher's execroot-relative interpreter and import paths here.
+    interpreter = os.path.abspath(sys.executable)
+    import_paths = [os.path.abspath(path) for path in sys.path]
+    python_shim = os.path.join(shim_dir, "meson.py")
     shim_content = (
-        "#!" + sys.executable + "\n"
         "import sys\n"
-        "sys.path[:0] = " + repr(sys.path) + "\n"
+        "sys.path[:0] = " + repr(import_paths) + "\n"
         "from mesonbuild import mesonmain\n"
         "sys.exit(mesonmain.run(sys.argv[1:], sys.argv[0]))\n"
     )
-    with open(shim_path, "w", encoding="utf-8") as f:
+    with open(python_shim, "w", encoding="utf-8") as f:
         f.write(shim_content)
+    # Keep the kernel shebang short even under deep Bazel sandbox paths.
+    launcher = "#!/bin/sh\nexec " + shlex.join([interpreter, python_shim]) + ' "$@"\n'
+    with open(shim_path, "w", encoding="utf-8") as f:
+        f.write(launcher)
     os.chmod(shim_path, 0o755)
     return shim_dir
 
 
 def _run_custom_targets(
     ninja_bin: str, build_dir: str, introspect_path: str, log_path: str,
+    required_outputs: list[str],
 ) -> int:
     """Invoke ninja to build every custom_target the project declares.
 
@@ -264,6 +316,13 @@ def _run_custom_targets(
             else:
                 targets.append(f)
 
+    if required_outputs:
+        missing = set(required_outputs).difference(targets)
+        if missing:
+            sys.stderr.write("unknown required Meson custom outputs: %s\n" % ", ".join(sorted(missing)))
+            return 1
+        targets = list(dict.fromkeys(required_outputs))
+
     if not targets:
         # No custom_targets in this project — nothing to do.
         return 0
@@ -297,6 +356,9 @@ def _run_custom_targets(
         )
 
     if result.returncode != 0:
+        if required_outputs:
+            sys.stderr.write("[meson_runner] required custom generation failed. See the Meson log.\n")
+            return result.returncode
         # `-k 0` means we tried everything but some failed. Report the
         # exit code but don't abort — partial codegen is still useful
         # (frontend files generated even if backend ones failed).
@@ -364,7 +426,7 @@ def _run_with_stdout_to_file(out_path: str, fn, also_stderr: bool) -> int:
     return rc
 
 
-def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> None:
+def _relativize_compdb(src: str, dst: str, build_dir: str) -> None:
     """Rewrite compile_commands.json so paths are stable across sandboxes.
 
     Meson writes entries with absolute sandbox paths (build_dir for
@@ -386,12 +448,7 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
     with open(src, "r", encoding="utf-8") as fh:
         entries = json.load(fh)
 
-    abs_src_root = os.path.abspath(src_root)
-    if abs_src_root.endswith(src_root):
-        sandbox_root = abs_src_root[: -len(src_root)].rstrip("/")
-    else:
-        # Fallback: cwd is the sandbox root.
-        sandbox_root = os.getcwd()
+    sandbox_root = os.getcwd()
 
     def _rewrite_token(tok: str) -> str | None:
         # Strip sandbox-absolute prefixes so the path becomes
@@ -434,11 +491,10 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
     for entry in entries:
         entry["directory"] = "."
 
+        source = None
         if "file" in entry:
-            f = entry["file"]
-            if not os.path.isabs(f):
-                f = os.path.normpath(os.path.join(build_dir, f))
-            entry["file"] = _rewrite_token(f) or f
+            source = os.path.normpath(os.path.join(build_dir, entry["file"]))
+            entry["file"] = _rewrite_token(source) or source
 
         # Meson emits EITHER `arguments` (list) or `command` (shell
         # string). Normalize both into a rewritten list and store as
@@ -458,7 +514,10 @@ def _relativize_compdb(src: str, dst: str, src_root: str, build_dir: str) -> Non
                 # Drop this flag and its paired argument.
                 i += 2
                 continue
-            tok = _rewrite_flag(a)
+            if source is not None and not a.startswith("-") and os.path.normpath(os.path.join(build_dir, a)) == source:
+                tok = entry["file"]
+            else:
+                tok = _rewrite_flag(a)
             if tok is None:
                 # Output-only artifact under build_dir (object file etc.);
                 # drop. We DO preserve -I/-isystem flags pointing into

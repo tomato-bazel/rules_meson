@@ -14,4 +14,5 @@ meson_configure(
     marker = "meson.build",
     auxiliary_tools = ["roma_aux_probe"],
     auxiliary_tool_environment = {"aux_data.txt": "ROMA_MESON_AUX_DATA"},
+    required_custom_outputs = ["generated.h"],
 )

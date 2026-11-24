@@ -1,3 +1,6 @@
 #!/bin/sh
 set -eu
 test "$(cat "$ROMA_MESON_AUX_DATA")" = expected
+if [ "$#" -gt 0 ]; then
+    printf '#define MESON_DECLARED_TOOL 1\n' > "$1"
+fi
