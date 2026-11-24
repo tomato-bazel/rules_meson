@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("//meson:meson_configure.bzl", "meson_configure")
 
 # M0 smoke target: confirms meson_configure works end-to-end against a
@@ -15,4 +16,11 @@ meson_configure(
     auxiliary_tools = ["roma_aux_probe"],
     auxiliary_tool_environment = {"aux_data.txt": "ROMA_MESON_AUX_DATA"},
     required_custom_outputs = ["generated.h"],
+)
+
+py_test(
+    name = "hello_compdb_test",
+    srcs = ["hello_compdb_test.py"],
+    args = ["$(rootpath :hello_compdb)"],
+    data = [":hello_compdb"],
 )

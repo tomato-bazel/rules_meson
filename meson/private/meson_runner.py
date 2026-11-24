@@ -455,6 +455,14 @@ def _relativize_compdb(src: str, dst: str, build_dir: str) -> None:
         # workspace-relative.
         if tok.startswith(sandbox_root + "/"):
             return tok[len(sandbox_root) + 1:]
+        # macOS tools can spell the sandbox path as /tmp while getcwd
+        # returns /private/tmp. Resolve the parent without following a
+        # staged source file's final symlink.
+        if os.path.isabs(tok):
+            parent, basename = os.path.split(tok)
+            normalized = os.path.join(os.path.realpath(parent), basename)
+            if normalized.startswith(sandbox_root + "/"):
+                return normalized[len(sandbox_root) + 1:]
         # build_dir paths get replaced with the ${MESON_HEADERS_TREE}
         # sentinel. Downstream consumers (rules_lang's
         # c_ast_dump_from_compdb etc.) substitute the sentinel with the
